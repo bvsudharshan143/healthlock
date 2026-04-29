@@ -81,79 +81,67 @@ def home():
 
 @app.route("/run", methods=["POST"])
 def run_analysis():
-    data = run_athena_query()
+    analysis_type = request.form.get("analysis_type")
+    data = run_athena_query(analysis_type)
     insight = generate_ai_summary(data)
 
     return render_template("result.html", data=data, insight=insight)
 
-def run_athena_query():
+def run_athena_query(analysis_type):
     import time
-    import csv
-    
-    try:
-        athena = boto3.client('athena', region_name='ap-south-1')
+    athena = boto3.client('athena', region_name='ap-south-1')
 
+    if analysis_type == "Drug Effectiveness":
         query = """
-        SELECT treatment, AVG(recovery_rate) AS avg_recovery
+        SELECT AVG(recovery_rate) AS avg_recovery
         FROM patient_data
-        GROUP BY treatment
+        WHERE treatment = 'Treatment A'
         """
+        label = "Treatment A"
 
-        response = athena.start_query_execution(
-            QueryString=query,
-            QueryExecutionContext={'Database': 'healthlock_db'},
-            ResultConfiguration={
-                'OutputLocation': 's3://healthlock-athena-output/'
-            }
-        )
+    elif analysis_type == "Patient Recovery Rate":
+        query = """
+        SELECT AVG(recovery_rate) AS avg_recovery
+        FROM patient_data
+        WHERE treatment = 'Treatment B'
+        """
+        label = "Treatment B"
 
-        query_execution_id = response['QueryExecutionId']
-
-        # Wait for query to complete
-        while True:
-            status = athena.get_query_execution(QueryExecutionId=query_execution_id)
-            state = status['QueryExecution']['Status']['State']
-
-            if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:
-                break
-            time.sleep(2)
-
-        result = athena.get_query_results(QueryExecutionId=query_execution_id)
-
-        rows = result['ResultSet']['Rows']
-
-        # Skip header
-        data = rows[1]['Data']
-
+    else:
+        # Simulated side effects
         return {
-            "analysis": data[0]['VarCharValue'],
-            "result": float(data[1]['VarCharValue']),
-            "description": "Average recovery rate from Athena"
+            "analysis": "Side Effects",
+            "result": 0.015,
+            "description": "Simulated side effect rate"
         }
-    except Exception as e:
-        print(f"Athena Query Failed ({e}), falling back to local CSV simulation.")
-        try:
-            with open('patient_data.csv', 'r') as f:
-                reader = csv.DictReader(f)
-                treatment_a_rates = []
-                for row in reader:
-                    if row['treatment'] == 'Treatment A':
-                        treatment_a_rates.append(float(row['recovery_rate']))
-                
-                avg_rate = sum(treatment_a_rates) / len(treatment_a_rates) if treatment_a_rates else 0.045
-                
-                return {
-                    "analysis": "Treatment A",
-                    "result": avg_rate,
-                    "description": "Average recovery rate (Local Simulation)"
-                }
-        except Exception as e2:
-            print("Local CSV read failed:", e2)
-            return {
-                "analysis": "Treatment A",
-                "result": 0.045,
-                "description": "Average recovery rate (Fallback)"
-            }
+
+    response = athena.start_query_execution(
+        QueryString=query,
+        QueryExecutionContext={'Database': 'healthlock_db'},
+        ResultConfiguration={
+            'OutputLocation': 's3://healthlock-athena-output/'
+        }
+    )
+
+    query_execution_id = response['QueryExecutionId']
+
+    while True:
+        status = athena.get_query_execution(QueryExecutionId=query_execution_id)
+        state = status['QueryExecution']['Status']['State']
+        if state in ['SUCCEEDED', 'FAILED', 'CANCELLED']:
+            break
+        time.sleep(2)
+
+    result = athena.get_query_results(QueryExecutionId=query_execution_id)
+
+    rows = result['ResultSet']['Rows']
+    value = float(rows[1]['Data'][0]['VarCharValue'])
+
+    return {
+        "analysis": label,
+        "result": value,
+        "description": "Average recovery rate"
+    }
 # =========================
 # RUN APP
 # =========================
